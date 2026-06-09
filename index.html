@@ -1,0 +1,211 @@
+<style>
+  .ai-app-container {
+    background-color: #1a1e29;
+    color: #ffffff;
+    border-radius: 12px;
+    padding: 30px;
+    max-width: 600px;
+    margin: 0 auto;
+    font-family: 'Pretendard', -apple-system, sans-serif;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+  }
+
+  #upload-section { display: block; }
+  .upload-box {
+    border: 2px dashed #4a5568;
+    border-radius: 8px;
+    padding: 40px 20px;
+    text-align: center;
+    cursor: pointer;
+    margin-top: 20px;
+    transition: 0.3s;
+  }
+  .upload-box:hover { background-color: #2d3748; }
+  #file-input { display: none; }
+  .custom-upload-btn {
+    background-color: #4299e1;
+    color: white;
+    padding: 10px 20px;
+    border-radius: 20px;
+    display: inline-block;
+    margin-top: 15px;
+  }
+
+  #status-message {
+    margin-top: 20px;
+    font-size: 1.1rem;
+    color: #63b3ed;
+    font-weight: bold;
+    text-align: center;
+    word-break: keep-all;
+  }
+
+  #slideshow-section {
+    display: none;
+    width: 100%;
+    height: 600px;
+    background: #000;
+    border-radius: 12px;
+    overflow-y: scroll;
+    scroll-snap-type: y mandatory;
+    -ms-overflow-style: none;  
+    scrollbar-width: none;  
+  }
+  #slideshow-section::-webkit-scrollbar { display: none; }
+
+  .slide {
+    width: 100%;
+    height: 100%;
+    scroll-snap-align: start;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    padding: 30px;
+    box-sizing: border-box;
+    text-align: center;
+    border-bottom: 1px solid #333;
+  }
+  .slide h2 { color: #4299e1; font-size: 1.8rem; margin-bottom: 20px; }
+  .slide p { font-size: 1.2rem; line-height: 1.6; word-break: keep-all; }
+  
+  .reset-btn {
+    margin-top: 20px;
+    background-color: #e2e8f0;
+    color: #1a202c;
+    padding: 12px 24px;
+    border-radius: 8px;
+    cursor: pointer;
+    border: none;
+    font-weight: bold;
+    font-size: 1rem;
+    transition: 0.2s;
+  }
+  .reset-btn:hover { background-color: #cbd5e0; }
+</style>
+
+<div class="ai-app-container">
+  <div id="upload-section">
+    <h3 style="margin-top:0;">수행평가 안내서 요약 AI</h3>
+    <p style="color:#a0aec0; font-size:0.9rem;">이미지(JPG, PNG)를 올리면 AI가 자동으로 분석하여 쇼츠로 만들어줍니다.</p>
+    
+    <label class="upload-box" id="upload-label" for="file-input">
+      <div style="font-size: 2rem;">📄</div>
+      <div style="margin-top: 10px;">여기를 클릭하여 안내서 이미지를 선택하세요.</div>
+      <div class="custom-upload-btn">파일 선택</div>
+      <input type="file" id="file-input" accept="image/png, image/jpeg" />
+    </label>
+
+    <div id="status-message"></div>
+  </div>
+
+  <div id="slideshow-section"></div>
+</div>
+
+<script>
+  const fileInput = document.getElementById('file-input');
+  const statusMsg = document.getElementById('status-message');
+  const uploadSection = document.getElementById('upload-section');
+  const slideshowSection = document.getElementById('slideshow-section');
+  const uploadLabel = document.getElementById('upload-label');
+
+  const selectedModel = "Llama-3.2-1B-Instruct-q4f16_1-MLC";
+
+  function resetApp() {
+    uploadLabel.style.pointerEvents = 'auto';
+    uploadLabel.style.opacity = '1';
+    fileInput.value = '';
+  }
+
+  fileInput.addEventListener('change', async (event) => {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    try {
+      uploadLabel.style.pointerEvents = 'none';
+      uploadLabel.style.opacity = '0.5';
+      statusMsg.style.color = '#63b3ed';
+
+      // ==========================================
+      // [핵심 변경] Tesseract.js 동적 로드 (아임웹 차단 우회)
+      // ==========================================
+      statusMsg.innerText = "⚙️ 시스템 준비 중... (라이브러리 연결)";
+      
+      if (!window.Tesseract) {
+        await new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+          script.onload = resolve;
+          script.onerror = () => reject(new Error("OCR 라이브러리를 불러오지 못했습니다."));
+          document.head.appendChild(script);
+        });
+      }
+
+      // 1단계: 글자 추출
+      statusMsg.innerText = "🔍 1/3: 이미지에서 글자를 읽어내는 중입니다...";
+      const { data: { text } } = await window.Tesseract.recognize(file, 'kor+eng');
+      
+      if(text.trim().length < 10) {
+        throw new Error("이미지에서 글자를 충분히 찾지 못했습니다. 선명한 사진을 올려주세요.");
+      }
+
+      // 2단계: AI 요약
+      statusMsg.innerText = "⏳ 2/3: AI 모델을 연결 중입니다... (잠시만 기다려주세요)";
+      const webllm = await import("https://esm.run/@mlc-ai/web-llm");
+
+      const initProgressCallback = (initProgress) => {
+        statusMsg.innerText = `⏳ 2/3: AI 데이터 로딩 중... ${Math.round(initProgress.progress * 100)}% (최초 1회만 진행)`;
+      };
+
+      const engine = await webllm.CreateMLCEngine(selectedModel, { initProgressCallback });
+      
+      statusMsg.innerText = "🧠 3/3: 추출된 내용을 바탕으로 핵심을 요약 중입니다...";
+      const prompt = `다음 수행평가 안내서 내용을 읽고 가장 중요한 핵심 내용을 3~4개의 문장으로 요약해줘. 각 문장은 엔터(줄바꿈)로 구분해줘.\n\n안내서 내용: ${text}`;
+      
+      const reply = await engine.chat.completions.create({
+        messages: [{ role: "user", content: prompt }],
+      });
+
+      const summaryText = reply.choices[0].message.content;
+
+      // 3단계: 쇼츠 슬라이드 생성
+      uploadSection.style.display = 'none';
+      slideshowSection.style.display = 'block';
+
+      const sentences = summaryText.split('\n').filter(s => s.trim().length > 0);
+      
+      let slidesHTML = `
+        <div class="slide">
+          <h2>수행평가 핵심 브리핑</h2>
+          <p>아래로 스와이프하여<br>요약된 내용을 확인하세요 👇</p>
+        </div>
+      `;
+
+      sentences.forEach((sentence, index) => {
+        const cleanSentence = sentence.replace(/^[-*0-9.]+\s*/, '');
+        slidesHTML += `
+          <div class="slide">
+            <h2>Point ${index + 1}</h2>
+            <p>${cleanSentence}</p> 
+          </div>
+        `;
+      });
+      
+      slidesHTML += `
+        <div class="slide">
+          <h2>끝!</h2>
+          <p>다른 수행평가 안내서도 요약해볼까요?</p>
+          <button class="reset-btn" onclick="location.reload()">새로 요약하기</button>
+        </div>
+      `;
+
+      slideshowSection.innerHTML = slidesHTML;
+
+    } catch (error) {
+      statusMsg.style.color = '#fc8181';
+      statusMsg.innerText = `❌ 오류 발생: ${error.message}`;
+      console.error(error);
+      resetApp();
+    }
+  });
+</script>
