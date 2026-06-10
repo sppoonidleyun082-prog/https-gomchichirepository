@@ -126,9 +126,7 @@
       uploadLabel.style.opacity = '0.5';
       statusMsg.style.color = '#63b3ed';
 
-      // ==========================================
-      // [핵심 변경] Tesseract.js 동적 로드 (아임웹 차단 우회)
-      // ==========================================
+      // 1단계: 글자 추출
       statusMsg.innerText = "⚙️ 시스템 준비 중... (라이브러리 연결)";
       
       if (!window.Tesseract) {
@@ -141,7 +139,6 @@
         });
       }
 
-      // 1단계: 글자 추출
       statusMsg.innerText = "🔍 1/3: 이미지에서 글자를 읽어내는 중입니다...";
       const { data: { text } } = await window.Tesseract.recognize(file, 'kor+eng');
       
@@ -160,10 +157,17 @@
       const engine = await webllm.CreateMLCEngine(selectedModel, { initProgressCallback });
       
       statusMsg.innerText = "🧠 3/3: 추출된 내용을 바탕으로 핵심을 요약 중입니다...";
-      const prompt = `다음 수행평가 안내서 내용을 읽고 가장 중요한 핵심 내용을 3~4개의 문장으로 요약해줘. 각 문장은 엔터(줄바꿈)로 구분해줘.\n\n안내서 내용: ${text}`;
+      
+      // [개선] 헛소리 방지를 위해 프롬프트를 아주 엄격하게 설정
+      const prompt = `너는 수행평가 요약 전문가야. 반드시 아래 제공된 [안내서 내용] 안에서만 정보를 찾아서 요약해. 없는 내용을 절대 지어내지 마.
+핵심 내용을 한국어로 딱 3개의 문장으로 요약해. 각 문장은 줄바꿈(엔터)으로 구분해.
+
+[안내서 내용]
+${text}`;
       
       const reply = await engine.chat.completions.create({
         messages: [{ role: "user", content: prompt }],
+        temperature: 0.1, // [개선] 창의성을 낮추고 사실 위주로 답변하도록 강제 설정
       });
 
       const summaryText = reply.choices[0].message.content;
@@ -172,7 +176,11 @@
       uploadSection.style.display = 'none';
       slideshowSection.style.display = 'block';
 
-      const sentences = summaryText.split('\n').filter(s => s.trim().length > 0);
+      // 줄바꿈으로 나누고 빈 문장 버리기
+      let sentences = summaryText.split('\n').filter(s => s.trim().length > 0);
+      
+      // [개선] 슬라이드 수 강제 제한: 텍스트가 몇 줄이든 무조건 앞의 3개까지만 자르기
+      sentences = sentences.slice(0, 3);
       
       let slidesHTML = `
         <div class="slide">
@@ -181,8 +189,9 @@
         </div>
       `;
 
+      // 제한된 3개의 문장으로만 슬라이드 만들기
       sentences.forEach((sentence, index) => {
-        const cleanSentence = sentence.replace(/^[-*0-9.]+\s*/, '');
+        const cleanSentence = sentence.replace(/^[-*0-9.]+\s*/, ''); // 불필요한 기호 제거
         slidesHTML += `
           <div class="slide">
             <h2>Point ${index + 1}</h2>
@@ -191,6 +200,7 @@
         `;
       });
       
+      // 마지막 끝맺음 슬라이드
       slidesHTML += `
         <div class="slide">
           <h2>끝!</h2>
